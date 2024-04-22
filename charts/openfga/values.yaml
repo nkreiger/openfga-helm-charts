@@ -124,7 +124,7 @@ telemetry:
       prometheus.io/port: "{{ .Values.containerPorts.prometheus }}"
 
 datastore:
-  engine: memory
+  engine: postgres
   uri:
   uriSecret:
   maxCacheSize:

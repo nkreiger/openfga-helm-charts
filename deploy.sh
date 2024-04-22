@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # IMPORTANT: this must match the chart version at `$CHART_PATH/Chart.yaml`
-CHART_VERSION=0.1.25
+CHART_VERSION=0.2.3
 CHART=fianu
 CHART_PATH=charts/openfga
 NAME=openfga

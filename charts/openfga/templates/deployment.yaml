@@ -10,7 +10,7 @@ metadata:
   {{- end }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ ternary 1 .Values.replicaCount (eq .Values.datastore.engine "memory")}}
   {{- end }}
   selector:
     matchLabels:
@@ -19,11 +19,11 @@ spec:
     metadata:
       annotations:
       {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
+      {{- toYaml . | nindent 8 }}
       {{- end }}
-        prometheus.io/scrape: "true"
-        prometheus.io/path: /metrics
-        prometheus.io/port: "{{ (split ":" .Values.telemetry.metrics.addr)._1 }}"
+      prometheus.io/scrape: "true"
+      prometheus.io/path: /metrics
+      prometheus.io/port: "{{ (split ":" .Values.telemetry.metrics.addr)._1 }}"
       labels:
         {{- include "openfga.selectorLabels" . | nindent 8 }}
     spec:
@@ -34,13 +34,16 @@ spec:
       serviceAccountName: {{ include "openfga.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- if and (has .Values.datastore.engine (list "postgres" "mysql")) .Values.datastore.applyMigrations }}
+      {{- if and (has .Values.datastore.engine (list "postgres" "mysql")) .Values.datastore.applyMigrations .Values.datastore.waitForMigrations }}
       initContainers:
         - name: wait-for-migration
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: groundnuty/k8s-wait-for:v1.6
+          image: "{{ .Values.initContainer.repository }}:{{ .Values.initContainer.tag }}"
+          imagePullPolicy: {{ .Values.initContainer.pullPolicy }}
           args: ["job", '{{ include "openfga.fullname" . }}-migrate']
+          resources:
+            {{- toYaml .Values.datastore.migrations.resources | nindent 12 }}
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
@@ -115,7 +118,7 @@ spec:
 
             {{- if .Values.experimentals }}
             - name: OPENFGA_EXPERIMENTALS
-              value: {{ .Values.experimentals }}
+              value: "{{ join "," .Values.experimentals }}"
             {{- end }}
 
             {{- if .Values.grpc.addr }}
@@ -126,7 +129,7 @@ spec:
             {{- if .Values.grpc.tls.enabled }}
             - name: OPENFGA_GRPC_TLS_ENABLED
               value: {{ .Values.grpc.tls.enabled }}
-            
+
             - name: OPENFGA_GRPC_TLS_CERT
               value: {{ .Values.grpc.tls.cert }}
 
@@ -150,7 +153,7 @@ spec:
 
             - name: OPENFGA_HTTP_TLS_CERT
               value: {{ .Values.http.tls.cert }}
-            
+
             - name: OPENFGA_HTTP_TLS_KEY
               value: {{ .Values.http.tls.key }}
             {{- end }}
@@ -190,12 +193,10 @@ spec:
               value: {{ .Values.authn.oidc.issuer }}
             {{- end }}
 
-            {{- if .Values.playground.enabled }}
             - name: OPENFGA_PLAYGROUND_ENABLED
               value: "{{ .Values.playground.enabled }}"
             - name: OPENFGA_PLAYGROUND_PORT
               value: "{{ .Values.playground.port }}"
-            {{- end }}
 
             {{- if .Values.profiler.enabled }}
             - name: OPENFGA_PROFILER_ENABLED
@@ -212,6 +213,11 @@ spec:
               value: {{ .Values.log.level }}
             {{- end }}
 
+            {{- if .Values.log.timestampFormat }}
+            - name: OPENFGA_LOG_TIMESTAMP_FORMAT
+              value: {{ .Values.log.timestampFormat }}
+            {{- end }}
+
             {{- if .Values.maxTuplesPerWrite }}
             - name: OPENFGA_MAX_TUPLES_PER_WRITE
               value: "{{ .Values.maxTuplesPerWrite }}"
@@ -220,6 +226,11 @@ spec:
             {{- if .Values.maxTypesPerAuthorizationModel }}
             - name: OPENFGA_MAX_TYPES_PER_AUTHORIZATION_MODEL
               value: "{{ .Values.maxTypesPerAuthorizationModel }}"
+            {{- end }}
+
+            {{- if .Values.maxAuthorizationModelSizeInBytes }}
+            - name: OPENFGA_MAX_AUTHORIZATION_MODEL_SIZE_IN_BYTES
+              value: "{{ .Values.maxAuthorizationModelSizeInBytes }}"
             {{- end }}
 
             {{- if .Values.changelogHorizonOffset }}
@@ -232,6 +243,11 @@ spec:
               value: "{{ .Values.resolveNodeLimit }}"
             {{- end }}
 
+            {{- if .Values.resolveNodeBreadthLimit }}
+            - name: OPENFGA_RESOLVE_NODE_BREADTH_LIMIT
+              value: "{{ .Values.resolveNodeBreadthLimit }}"
+            {{- end }}
+
             {{- if .Values.listObjectsDeadline }}
             - name: OPENFGA_LIST_OBJECTS_DEADLINE
               value: "{{ .Values.listObjectsDeadline }}"
@@ -240,6 +256,26 @@ spec:
             {{- if .Values.listObjectsMaxResults }}
             - name: OPENFGA_LIST_OBJECTS_MAX_RESULTS
               value: "{{ .Values.listObjectsMaxResults }}"
+            {{- end }}
+
+            {{- if .Values.checkQueryCache.enabled }}
+            - name: OPENFGA_CHECK_QUERY_CACHE_ENABLED
+              value: "{{ .Values.checkQueryCache.enabled }}"
+            {{- end }}
+
+            {{- if .Values.checkQueryCache.limit }}
+            - name: OPENFGA_CHECK_QUERY_CACHE_LIMIT
+              value: "{{ .Values.checkQueryCache.limit }}"
+            {{- end }}
+
+            {{- if .Values.checkQueryCache.ttl }}
+            - name: OPENFGA_CHECK_QUERY_CACHE_TTL
+              value: "{{ .Values.checkQueryCache.ttl }}"
+            {{- end }}
+
+            {{- if .Values.requestDurationDatastoreQueryCountBuckets }}
+            - name: OPENFGA_REQUEST_DURATION_DATASTORE_QUERY_COUNT_BUCKETS
+              value: "{{ join "," .Values.requestDurationDatastoreQueryCountBuckets }}"
             {{- end }}
 
             {{- if .Values.allowWriting1_0Models }}
@@ -277,9 +313,18 @@ spec:
               value: {{ .Values.telemetry.trace.otlp.endpoint }}
             {{- end }}
 
+            {{- if .Values.telemetry.trace.otlp.tls.enabled }}
+            - name: OPENFGA_TRACE_OTLP_TLS_ENABLED
+              value: {{ .Values.telemetry.trace.otlp.tls.enabled }}
+            {{- end }}
+
             {{- if .Values.telemetry.trace.sampleRatio }}
             - name: OPENFGA_TRACE_SAMPLE_RATIO
               value: "{{ .Values.telemetry.trace.sampleRatio }}"
+            {{- end }}
+
+            {{- with .Values.extraEnvVars }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
 
           {{- if .Values.customReadinessProbe }}
@@ -308,9 +353,20 @@ spec:
 
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+
+          {{- with .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
         {{- if .Values.sidecars }}
         {{- include "common.tplvalues.render" ( dict "value" .Values.sidecars "context" $) | nindent 8 }}
         {{- end }}
+
+      {{- with .Values.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
